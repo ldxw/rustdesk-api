@@ -22,6 +22,11 @@ func ApiInit() {
 		if err != nil {
 			panic(err)
 		}
+	} else {
+		// 未显式配置时不信任任何代理，避免客户端伪造 X-Forwarded-For 绕过按 IP 的登录限速
+		if err := g.SetTrustedProxies(nil); err != nil {
+			panic(err)
+		}
 	}
 
 	if global.Config.Gin.Mode == gin.ReleaseMode {

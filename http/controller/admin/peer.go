@@ -231,6 +231,11 @@ func (ct *Peer) SimpleData(c *gin.Context) {
 		response.Fail(c, 101, response.TranslateMsg(c, "ParamsError"))
 		return
 	}
+	//限制单次查询的 ID 数量，避免被用于批量枚举或放大查询
+	if len(f.Ids) > 200 {
+		response.Fail(c, 101, response.TranslateMsg(c, "ParamsError"))
+		return
+	}
 	res := service.AllService.PeerService.List(1, 99999, func(tx *gorm.DB) {
 		//可以公开的情报
 		tx.Select("id,version")

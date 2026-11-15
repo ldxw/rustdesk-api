@@ -13,14 +13,14 @@ type AddressBookForm struct {
 }
 
 type PeerForm struct {
-	Cpu      string `json:"cpu"`
-	Hostname string `json:"hostname"`
-	Id       string `json:"id"`
-	Memory   string `json:"memory"`
-	Os       string `json:"os"`
-	Username string `json:"username"`
-	Uuid     string `json:"uuid"`
-	Version  string `json:"version"`
+	Cpu      string `json:"cpu" validate:"omitempty,lte=255"`
+	Hostname string `json:"hostname" validate:"omitempty,lte=255"`
+	Id       string `json:"id" validate:"omitempty,lte=128"`
+	Memory   string `json:"memory" validate:"omitempty,lte=64"`
+	Os       string `json:"os" validate:"omitempty,lte=128"`
+	Username string `json:"username" validate:"omitempty,lte=255"`
+	Uuid     string `json:"uuid" validate:"omitempty,lte=128"`
+	Version  string `json:"version" validate:"omitempty,lte=64"`
 }
 
 func (pf *PeerForm) ToPeer() *model.Peer {

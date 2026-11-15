@@ -82,25 +82,53 @@ func (os *OauthService) GetOauthCache(key string) *OauthCacheItem {
 	return v.(*OauthCacheItem)
 }
 
+// DefaultOauthCacheTTL 授权上下文的默认有效期。缓存项含 PKCE verifier、nonce 等
+// 敏感数据，任何写入路径都必须带过期时间，不能永久驻留内存
+const DefaultOauthCacheTTL = 5 * 60
+
 func (os *OauthService) SetOauthCache(key string, item *OauthCacheItem, expire uint) {
 	OauthCache.Store(key, item)
-	if expire > 0 {
-		time.AfterFunc(time.Duration(expire)*time.Second, func() {
-			os.DeleteOauthCache(key)
-		})
+	if expire == 0 {
+		expire = DefaultOauthCacheTTL
 	}
+	time.AfterFunc(time.Duration(expire)*time.Second, func() {
+		os.DeleteOauthCache(key)
+	})
 }
 
 func (os *OauthService) DeleteOauthCache(key string) {
 	OauthCache.Delete(key)
 }
 
+// buildWebauthURL 构造 webauth 的前端跳转地址
+// ApiServer 来自配置文件，state 会被拼进 URL，两者都先校验再拼接
+func buildWebauthURL(state string) (string, error) {
+	apiServer := Config.Rustdesk.ApiServer
+	if apiServer == "" {
+		return "", errors.New("SystemError")
+	}
+	u, err := url.Parse(apiServer)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", errors.New("SystemError")
+	}
+	return strings.TrimRight(apiServer, "/") + "/_admin/#/oauth/" + url.PathEscape(state), nil
+}
+
 func (os *OauthService) BeginAuth(op string) (error error, state, verifier, nonce, url string) {
-	state = utils.RandomString(10) + strconv.FormatInt(time.Now().Unix(), 10)
+	// state 同时是授权上下文的缓存 key，随机段生成失败必须中止，
+	// 否则退化成可预测的时间戳，授权上下文可被枚举
+	random := utils.RandomString(32)
+	if random == "" {
+		return errors.New("SystemError"), "", "", "", ""
+	}
+	state = random + strconv.FormatInt(time.Now().Unix(), 10)
 	verifier = ""
 	nonce = ""
 	if op == model.OauthTypeWebauth {
-		url = Config.Rustdesk.ApiServer + "/_admin/#/oauth/" + state
+		url, err := buildWebauthURL(state)
+		if err != nil {
+			return err, "", "", "", ""
+		}
 		//url = "http://localhost:8888/_admin/#/oauth/" + code
 		return nil, state, verifier, nonce, url
 	}
@@ -109,6 +137,10 @@ func (os *OauthService) BeginAuth(op string) (error error, state, verifier, nonc
 		extras := make([]oauth2.AuthCodeOption, 0, 3)
 
 		nonce = utils.RandomString(10)
+		// nonce 为空时回调侧的 nonce 校验会被整体跳过，必须在这里中止
+		if nonce == "" {
+			return errors.New("SystemError"), "", "", "", ""
+		}
 		extras = append(extras, oauth2.SetAuthURLParam("nonce", nonce))
 
 		if oauthInfo.PkceEnable != nil && *oauthInfo.PkceEnable {
@@ -213,24 +245,24 @@ func (os *OauthService) GetOauthConfig(op string) (err error, oauthInfo *model.O
 }
 
 func getHTTPClientWithProxy() *http.Client {
-	//add timeout 30s
-	timeout := time.Duration(60) * time.Second
+	// 所有分支都必须带超时，否则对端不响应时回调会无限挂起
+	timeout := 60 * time.Second
 	if Config.Proxy.Enable {
 		if Config.Proxy.Host == "" {
 			Logger.Warn("Proxy is enabled but proxy host is empty.")
-			return http.DefaultClient
+			return &http.Client{Timeout: timeout}
 		}
 		proxyURL, err := url.Parse(Config.Proxy.Host)
 		if err != nil {
 			Logger.Warn("Invalid proxy URL: ", err)
-			return http.DefaultClient
+			return &http.Client{Timeout: timeout}
 		}
 		transport := &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 		}
 		return &http.Client{Transport: transport, Timeout: timeout}
 	}
-	return http.DefaultClient
+	return &http.Client{Timeout: timeout}
 }
 func (os *OauthService) callbackBase(oauthConfig *oauth2.Config, provider *oidc.Provider, code string, verifier string, nonce string, userData interface{}) (err error, client *http.Client) {
 
@@ -361,6 +393,22 @@ func (os *OauthService) UserThirdInfo(op string, openId string) *model.UserThird
 
 // BindOauthUser: Bind third party account
 func (os *OauthService) BindOauthUser(userId uint, oauthUser *model.OauthUser, op string) error {
+	if userId == 0 || oauthUser == nil || oauthUser.OpenId == "" || op == "" {
+		return errors.New("invalid oauth user")
+	}
+	// 同一个第三方账号只能归属于一个用户，避免把他人已绑定的 openid 再绑给当前用户
+	if exist := os.UserThirdInfo(op, oauthUser.OpenId); exist.Id > 0 {
+		if exist.UserId == userId {
+			return nil
+		}
+		return errors.New("oauth already bound to another user")
+	}
+	// 同一用户对同一提供方只保留一条绑定记录
+	same := &model.UserThird{}
+	DB.Where("user_id = ? and op = ?", userId, op).First(same)
+	if same.Id > 0 {
+		return errors.New("user already bound this oauth provider")
+	}
 	utr := &model.UserThird{}
 	err, oauthType := os.GetTypeByOp(op)
 	if err != nil {

@@ -31,6 +31,11 @@ func (p *Peer) SysInfo(c *gin.Context) {
 		return
 	}
 	fpe := f.ToPeer()
+	if f.Id == "" {
+		// 设备 ID 为空时无法归属，按既有契约告知客户端下次心跳再传
+		c.String(http.StatusOK, "ID_NOT_FOUND")
+		return
+	}
 	pe := service.AllService.PeerService.FindById(f.Id)
 	if pe.RowId == 0 {
 		pe = f.ToPeer()
@@ -41,6 +46,11 @@ func (p *Peer) SysInfo(c *gin.Context) {
 			return
 		}
 	} else {
+		// uuid 是 peer 的归属键，未认证的 sysinfo 不允许改写已登记的值，
+		// 否则可先改 uuid 再用该 uuid 登录把设备绑到自己名下
+		if pe.Uuid != "" {
+			fpe.Uuid = pe.Uuid
+		}
 		if pe.UserId == 0 {
 			pe.UserId = service.AllService.UserService.FindLatestUserIdFromLoginLogByUuid(pe.Uuid, pe.Id)
 		}

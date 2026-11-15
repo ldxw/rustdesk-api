@@ -8,14 +8,14 @@ import (
 )
 
 type AuditConnForm struct {
-	Action    string   `json:"action"`
+	Action    string   `json:"action" validate:"omitempty,lte=32"`
 	ConnId    int64    `json:"conn_id"`
-	Id        string   `json:"id"`
-	Peer      []string `json:"peer"`
-	Ip        string   `json:"ip"`
+	Id        string   `json:"id" validate:"omitempty,lte=128"`
+	Peer      []string `json:"peer" validate:"omitempty,lte=2,dive,lte=255"`
+	Ip        string   `json:"ip" validate:"omitempty,lte=64"`
 	SessionId float64  `json:"session_id"`
 	Type      int      `json:"type"`
-	Uuid      string   `json:"uuid"`
+	Uuid      string   `json:"uuid" validate:"omitempty,lte=128"`
 }
 
 func (a *AuditConnForm) ToAuditConn() *model.AuditConn {
@@ -42,13 +42,13 @@ func (a *AuditConnForm) ToAuditConn() *model.AuditConn {
 }
 
 type AuditFileForm struct {
-	Id     string `json:"id"`
-	Info   string `json:"info"`
+	Id     string `json:"id" validate:"omitempty,lte=128"`
+	Info   string `json:"info" validate:"omitempty,lte=2048"`
 	IsFile bool   `json:"is_file"`
-	Path   string `json:"path"`
-	PeerId string `json:"peer_id"`
+	Path   string `json:"path" validate:"omitempty,lte=4096"`
+	PeerId string `json:"peer_id" validate:"omitempty,lte=128"`
 	Type   int    `json:"type"`
-	Uuid   string `json:"uuid"`
+	Uuid   string `json:"uuid" validate:"omitempty,lte=128"`
 }
 type AuditFileInfo struct {
 	Ip   string `json:"ip"`

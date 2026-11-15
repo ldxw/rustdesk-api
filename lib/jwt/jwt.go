@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"errors"
 	"fmt"
 	"github.com/golang-jwt/jwt/v5"
 	"time"
@@ -44,14 +45,21 @@ func (s *Jwt) GenerateToken(userId uint) string {
 }
 
 func (s *Jwt) ParseToken(tokenString string) (uint, error) {
+	if len(s.Key) == 0 {
+		return 0, errors.New("jwt key is empty")
+	}
+	if tokenString == "" {
+		return 0, errors.New("token is empty")
+	}
 	token, err := jwt.ParseWithClaims(tokenString, &UserClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return s.Key, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		return 0, err
 	}
-	if claims, ok := token.Claims.(*UserClaims); ok && token.Valid {
-		return claims.UserId, nil
+	claims, ok := token.Claims.(*UserClaims)
+	if !ok || !token.Valid || claims.UserId == 0 {
+		return 0, errors.New("invalid token claims")
 	}
-	return 0, err
+	return claims.UserId, nil
 }

@@ -58,7 +58,8 @@ type UserPasswordForm struct {
 }
 
 type ChangeCurPasswordForm struct {
-	OldPassword string `json:"old_password" validate:"required,gte=4,lte=32"`
+	// OldPassword 仅在账号已设置密码时才必填，第三方登录自动创建的账号首次设密时可为空
+	OldPassword string `json:"old_password" validate:"omitempty,lte=32"`
 	NewPassword string `json:"new_password" validate:"required,gte=4,lte=32"`
 }
 type GroupUsersQuery struct {
@@ -71,6 +72,9 @@ type RegisterForm struct {
 	Email           string `json:"email"` // validate:"required,email"
 	Password        string `json:"password" validate:"required,gte=4,lte=32"`
 	ConfirmPassword string `json:"confirm_password" validate:"required,gte=4,lte=32"`
+	// 验证码仅在当前 IP 已被要求验证码时校验，是否必填由限流器状态决定
+	CaptchaId string `json:"captcha_id"`
+	Captcha   string `json:"captcha"`
 }
 
 type UserTokenBatchDeleteForm struct {

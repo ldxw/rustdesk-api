@@ -69,6 +69,10 @@ func (r *Rustdesk) CmdCreate(c *gin.Context) {
 		response.Fail(c, 101, errList[0])
 		return
 	}
+	if err := validateServerCmdInput(f); err != nil {
+		response.Fail(c, 101, err.Error())
+		return
+	}
 	err := service.AllService.ServerCmdService.Create(f)
 	if err != nil {
 		response.Fail(c, 101, err.Error())
@@ -88,6 +92,10 @@ func (r *Rustdesk) CmdUpdate(c *gin.Context) {
 		response.Fail(c, 101, errList[0])
 		return
 	}
+	if err := validateServerCmdInput(f); err != nil {
+		response.Fail(c, 101, err.Error())
+		return
+	}
 	ex := service.AllService.ServerCmdService.Info(f.Id)
 	if ex.Id == 0 {
 		response.Fail(c, 101, response.TranslateMsg(c, "ItemNotFound"))
@@ -99,6 +107,18 @@ func (r *Rustdesk) CmdUpdate(c *gin.Context) {
 		return
 	}
 	response.Success(c, nil)
+}
+
+// validateServerCmdInput 校验自定义命令的 Cmd / Alias / Option 内容，
+// 防止把含换行、NUL 或非法字符的命令写库后再下发到服务端
+func validateServerCmdInput(f *model.ServerCmd) error {
+	if err := service.ValidateCmdName(f.Cmd); err != nil {
+		return err
+	}
+	if err := service.ValidateOption(f.Alias); err != nil {
+		return err
+	}
+	return service.ValidateOption(f.Option)
 }
 
 func (r *Rustdesk) SendCmd(c *gin.Context) {
@@ -116,6 +136,11 @@ func (r *Rustdesk) SendCmd(c *gin.Context) {
 		return
 	}
 	if rc.Target != model.ServerCmdTargetIdServer && rc.Target != model.ServerCmdTargetRelayServer {
+		response.Fail(c, 101, response.TranslateMsg(c, "ParamsError"))
+		return
+	}
+	// 只允许白名单内的命令，避免任意命令下发到 id/relay server
+	if !service.AllService.ServerCmdService.IsCmdAllowed(rc.Target, rc.Cmd) {
 		response.Fail(c, 101, response.TranslateMsg(c, "ParamsError"))
 		return
 	}

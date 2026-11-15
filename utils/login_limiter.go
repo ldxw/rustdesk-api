@@ -27,6 +27,7 @@ type CaptchaMeta struct {
 	Id        string
 	Content   string
 	Answer    string
+	Ip        string // 签发时的客户端 IP，校验时必须匹配，避免验证码被跨 IP 复用
 	ExpiresAt time.Time
 }
 
@@ -45,6 +46,7 @@ type LoginLimiter struct {
 	bannedIPs   map[string]BanRecord
 	provider    CaptchaProvider
 	cleanupStop chan struct{}
+	closeOnce   sync.Once
 }
 
 var defaultSecurityPolicy = SecurityPolicy{
@@ -72,6 +74,13 @@ func NewLoginLimiter(policy SecurityPolicy) *LoginLimiter {
 	}
 	go ll.cleanupRoutine()
 	return ll
+}
+
+// Close 停止后台清理协程，可重复调用
+func (ll *LoginLimiter) Close() {
+	ll.closeOnce.Do(func() {
+		close(ll.cleanupStop)
+	})
 }
 
 // 注册验证码提供者
@@ -118,7 +127,8 @@ func (ll *LoginLimiter) RecordFailedAttempt(ip string) {
 }
 
 // 生成验证码
-func (ll *LoginLimiter) RequireCaptcha() (error, CaptchaMeta) {
+// ip 为签发时的客户端 IP，随验证码一起存储，校验时必须匹配
+func (ll *LoginLimiter) RequireCaptcha(ip string) (error, CaptchaMeta) {
 	ll.mu.Lock()
 	defer ll.mu.Unlock()
 
@@ -136,6 +146,7 @@ func (ll *LoginLimiter) RequireCaptcha() (error, CaptchaMeta) {
 		Id:        id,
 		Content:   content,
 		Answer:    answer,
+		Ip:        ip,
 		ExpiresAt: time.Now().Add(ll.provider.Expiration()),
 	}
 
@@ -143,7 +154,8 @@ func (ll *LoginLimiter) RequireCaptcha() (error, CaptchaMeta) {
 }
 
 // 验证验证码
-func (ll *LoginLimiter) VerifyCaptcha(id, answer string) bool {
+// ip 必须与签发验证码时的客户端 IP 一致，避免验证码被跨 IP 复用
+func (ll *LoginLimiter) VerifyCaptcha(ip, id, answer string) bool {
 	ll.mu.Lock()
 	defer ll.mu.Unlock()
 
@@ -161,6 +173,11 @@ func (ll *LoginLimiter) VerifyCaptcha(id, answer string) bool {
 	// 清理过期验证码
 	if time.Now().After(captcha.ExpiresAt) {
 		delete(ll.captchas, id)
+		return false
+	}
+
+	// IP 不匹配时不删除，避免第三方通过试探提前消耗他人的验证码
+	if captcha.Ip != ip {
 		return false
 	}
 
@@ -245,7 +262,12 @@ func (ll *LoginLimiter) banIP(ip, reason string) {
 		Reason:    reason,
 	}
 	delete(ll.attempts, ip)
-	delete(ll.captchas, ip)
+	// captchas 以验证码 id 为 key，需按签发 IP 遍历删除该 IP 名下的全部验证码
+	for id, meta := range ll.captchas {
+		if meta.Ip == ip {
+			delete(ll.captchas, id)
+		}
+	}
 }
 
 func (ll *LoginLimiter) pruneAttempts(ip string, cutoff time.Time) []time.Time {

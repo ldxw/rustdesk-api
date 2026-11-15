@@ -195,7 +195,13 @@ func InitGlobal() {
 	}
 
 	//jwt
-	//fmt.Println(global.Config.Jwt.PrivateKey)
+	//空 key 是文档承诺的合法配置（不启用 JWT）：ParseToken 会拒绝一切 token，
+	//依赖 JWT 的 /api 鉴权路由将统一返回 401，因此这里只告警、不阻断启动。
+	if global.Config.Jwt.Key == "" {
+		global.Logger.Warnf("jwt.key 为空：JWT 已禁用，依赖它的 /api 鉴权路由将全部返回 401。若使用 MUST_LOGIN，请在 %s 中为 jwt.key 填入随机密钥，例如 openssl rand -base64 48", global.ConfigPath)
+	} else if len(global.Config.Jwt.Key) < 32 {
+		global.Logger.Warnf("jwt.key 长度不足 32 字节，签名强度偏弱。建议在 %s 中改为 openssl rand -base64 48 生成的密钥", global.ConfigPath)
+	}
 	global.Jwt = jwt.NewJwt(global.Config.Jwt.Key, global.Config.Jwt.ExpireDuration)
 	//locker
 	global.Lock = lock.NewLocal()

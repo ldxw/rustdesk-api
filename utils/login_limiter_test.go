@@ -31,6 +31,7 @@ func TestSecurityWorkflow(t *testing.T) {
 		BanDuration:      5 * time.Minute,
 	}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	ip := "192.168.1.100"
 
 	// 测试正常失败记录
@@ -61,6 +62,7 @@ func TestSecurityWorkflow(t *testing.T) {
 func TestCaptchaFlow(t *testing.T) {
 	policy := SecurityPolicy{CaptchaThreshold: 2}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	limiter.RegisterProvider(&MockCaptchaProvider{})
 	ip := "10.0.0.1"
 
@@ -74,19 +76,19 @@ func TestCaptchaFlow(t *testing.T) {
 	}
 
 	// 生成验证码
-	err, capc := limiter.RequireCaptcha()
+	err, capc := limiter.RequireCaptcha(ip)
 	if err != nil {
 		t.Fatalf("生成验证码失败: %v", err)
 	}
 	fmt.Printf("验证码内容: %#v\n", capc)
 
 	// 验证成功
-	if !limiter.VerifyCaptcha(capc.Id, capc.Answer) {
+	if !limiter.VerifyCaptcha(ip, capc.Id, capc.Answer) {
 		t.Error("验证码应该验证成功")
 	}
 
 	// 验证已删除
-	if limiter.VerifyCaptcha(capc.Id, capc.Answer) {
+	if limiter.VerifyCaptcha(ip, capc.Id, capc.Answer) {
 		t.Error("验证码应该已删除")
 	}
 
@@ -100,6 +102,7 @@ func TestCaptchaFlow(t *testing.T) {
 func TestCaptchaMustFlow(t *testing.T) {
 	policy := SecurityPolicy{CaptchaThreshold: 0}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	limiter.RegisterProvider(&MockCaptchaProvider{})
 	ip := "10.0.0.1"
 
@@ -109,14 +112,14 @@ func TestCaptchaMustFlow(t *testing.T) {
 	}
 
 	// 生成验证码
-	err, capc := limiter.RequireCaptcha()
+	err, capc := limiter.RequireCaptcha(ip)
 	if err != nil {
 		t.Fatalf("生成验证码失败: %v", err)
 	}
 	fmt.Printf("验证码内容: %#v\n", capc)
 
 	// 验证成功
-	if !limiter.VerifyCaptcha(capc.Id, capc.Answer) {
+	if !limiter.VerifyCaptcha(ip, capc.Id, capc.Answer) {
 		t.Error("验证码应该验证成功")
 	}
 
@@ -128,6 +131,7 @@ func TestCaptchaMustFlow(t *testing.T) {
 func TestAttemptTimeout(t *testing.T) {
 	policy := SecurityPolicy{CaptchaThreshold: 2, AttemptsWindow: 1 * time.Second}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	limiter.RegisterProvider(&MockCaptchaProvider{})
 	ip := "10.0.0.1"
 
@@ -141,7 +145,7 @@ func TestAttemptTimeout(t *testing.T) {
 	}
 
 	// 生成验证码
-	err, _ := limiter.RequireCaptcha()
+	err, _ := limiter.RequireCaptcha(ip)
 	if err != nil {
 		t.Fatalf("生成验证码失败: %v", err)
 	}
@@ -159,6 +163,7 @@ func TestAttemptTimeout(t *testing.T) {
 func TestCaptchaTimeout(t *testing.T) {
 	policy := SecurityPolicy{CaptchaThreshold: 2}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	limiter.RegisterProvider(&MockCaptchaProvider{})
 	ip := "10.0.0.1"
 
@@ -172,7 +177,7 @@ func TestCaptchaTimeout(t *testing.T) {
 	}
 
 	// 生成验证码
-	err, capc := limiter.RequireCaptcha()
+	err, capc := limiter.RequireCaptcha(ip)
 	if err != nil {
 		t.Fatalf("生成验证码失败: %v", err)
 	}
@@ -181,7 +186,7 @@ func TestCaptchaTimeout(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// 验证成功
-	if limiter.VerifyCaptcha(capc.Id, capc.Answer) {
+	if limiter.VerifyCaptcha(ip, capc.Id, capc.Answer) {
 		t.Error("验证码应该已过期")
 	}
 
@@ -190,6 +195,7 @@ func TestCaptchaTimeout(t *testing.T) {
 func TestBanFlow(t *testing.T) {
 	policy := SecurityPolicy{BanThreshold: 5}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	ip := "10.0.0.1"
 	// 触发ban
 	for i := 0; i < 5; i++ {
@@ -204,6 +210,7 @@ func TestBanFlow(t *testing.T) {
 func TestBanDisableFlow(t *testing.T) {
 	policy := SecurityPolicy{BanThreshold: 0}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	ip := "10.0.0.1"
 	// 触发ban
 	for i := 0; i < 5; i++ {
@@ -218,6 +225,7 @@ func TestBanDisableFlow(t *testing.T) {
 func TestBanTimeout(t *testing.T) {
 	policy := SecurityPolicy{BanThreshold: 5, BanDuration: 1 * time.Second}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	ip := "10.0.0.1"
 	// 触发ban
 	// 触发ban
@@ -236,6 +244,7 @@ func TestBanTimeout(t *testing.T) {
 func TestLimiterDisabled(t *testing.T) {
 	policy := SecurityPolicy{BanThreshold: 0, CaptchaThreshold: -1}
 	limiter := NewLoginLimiter(policy)
+	defer limiter.Close()
 	ip := "10.0.0.1"
 	// 触发ban
 	for i := 0; i < 5; i++ {
@@ -251,6 +260,7 @@ func TestLimiterDisabled(t *testing.T) {
 
 func TestB64CaptchaFlow(t *testing.T) {
 	limiter := NewLoginLimiter(defaultSecurityPolicy)
+	defer limiter.Close()
 	limiter.RegisterProvider(B64StringCaptchaProvider{})
 	ip := "10.0.0.1"
 
@@ -265,7 +275,7 @@ func TestB64CaptchaFlow(t *testing.T) {
 	}
 
 	// 生成验证码
-	err, capc := limiter.RequireCaptcha()
+	err, capc := limiter.RequireCaptcha(ip)
 	if err != nil {
 		t.Fatalf("生成验证码失败: %v", err)
 	}
@@ -279,7 +289,7 @@ func TestB64CaptchaFlow(t *testing.T) {
 	fmt.Printf("验证码内容: %#v\n", b64)
 
 	// 验证成功
-	if !limiter.VerifyCaptcha(capc.Id, capc.Answer) {
+	if !limiter.VerifyCaptcha(ip, capc.Id, capc.Answer) {
 		t.Error("验证码应该验证成功")
 	}
 	limiter.RemoveAttempts(ip)

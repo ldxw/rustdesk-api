@@ -35,6 +35,11 @@ func (l *Login) Login(c *gin.Context) {
 	// 检查登录限制
 	loginLimiter := global.LoginLimiter
 	clientIp := c.ClientIP()
+	banned, needCaptcha := loginLimiter.CheckSecurityStatus(clientIp)
+	if banned {
+		response.Error(c, response.TranslateMsg(c, "LoginBanned"))
+		return
+	}
 
 	f := &api.LoginForm{}
 	err := c.ShouldBindJSON(f)
@@ -54,12 +59,26 @@ func (l *Login) Login(c *gin.Context) {
 		return
 	}
 
+	// 检查是否需要验证码
+	if needCaptcha {
+		if f.CaptchaId == "" || f.Captcha == "" || !loginLimiter.VerifyCaptcha(clientIp, f.CaptchaId, f.Captcha) {
+			response.Error(c, response.TranslateMsg(c, "CaptchaError"))
+			return
+		}
+	}
+
 	u := service.AllService.UserService.InfoByUsernamePassword(f.Username, f.Password)
 
 	if u.Id == 0 {
 		loginLimiter.RecordFailedAttempt(clientIp)
 		global.Logger.Warn(fmt.Sprintf("Login Fail: %s %s %s", "UsernameOrPasswordError", c.RemoteIP(), c.ClientIP()))
-		response.Error(c, response.TranslateMsg(c, "UsernameOrPasswordError"))
+		// 认证失败后重新判定是否需要验证码，让客户端下一步去取验证码
+		_, needCaptcha = loginLimiter.CheckSecurityStatus(clientIp)
+		msg := response.TranslateMsg(c, "UsernameOrPasswordError")
+		if needCaptcha {
+			msg = response.TranslateMsg(c, "CaptchaRequired") + ": " + msg
+		}
+		response.Error(c, msg)
 		return
 	}
 
@@ -83,11 +102,57 @@ func (l *Login) Login(c *gin.Context) {
 		Type:     model.LoginLogTypeAccount,
 		Platform: f.DeviceInfo.Os,
 	})
+	if ut == nil {
+		response.Error(c, response.TranslateMsg(c, "SystemError"))
+		return
+	}
+
+	// 登录成功，清除登录限制
+	loginLimiter.RemoveAttempts(clientIp)
 
 	c.JSON(http.StatusOK, apiResp.LoginRes{
 		AccessToken: ut.Token,
 		Type:        "access_token",
 		User:        *(&apiResp.UserPayload{}).FromUser(u),
+	})
+}
+
+// Captcha 获取登录验证码
+// @Tags 登录
+// @Summary 获取登录验证码
+// @Description 当该 IP 因登录失败次数过多被要求验证码时返回验证码图片
+// @Accept  json
+// @Produce  json
+// @Success 200 {object} response.Response{data=object}
+// @Failure 500 {object} response.ErrorResponse
+// @Router /captcha [get]
+func (l *Login) Captcha(c *gin.Context) {
+	loginLimiter := global.LoginLimiter
+	clientIp := c.ClientIP()
+	banned, needCaptcha := loginLimiter.CheckSecurityStatus(clientIp)
+	if banned {
+		response.Fail(c, 101, response.TranslateMsg(c, "LoginBanned"))
+		return
+	}
+	if !needCaptcha {
+		response.Fail(c, 101, response.TranslateMsg(c, "NoCaptchaRequired"))
+		return
+	}
+	err, captcha := loginLimiter.RequireCaptcha(clientIp)
+	if err != nil {
+		response.Fail(c, 101, response.TranslateMsg(c, "CaptchaError")+err.Error())
+		return
+	}
+	err, b64 := loginLimiter.DrawCaptcha(captcha.Content)
+	if err != nil {
+		response.Fail(c, 101, response.TranslateMsg(c, "CaptchaError")+err.Error())
+		return
+	}
+	response.Success(c, gin.H{
+		"captcha": gin.H{
+			"id":  captcha.Id,
+			"b64": b64,
+		},
 	})
 }
 

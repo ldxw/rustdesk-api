@@ -699,7 +699,12 @@ func (a *Ab) PeerUpdate(c *gin.Context) {
 		response.Error(c, response.TranslateMsg(c, "ParamsError"))
 		return
 	}
-	fidstr := fid.(string)
+	fidstr, ok := fid.(string)
+	if !ok {
+		//id 必须是字符串，其他类型直接拒绝，避免类型断言 panic
+		response.Error(c, response.TranslateMsg(c, "ParamsError"))
+		return
+	}
 
 	ab := service.AllService.AddressBookService.InfoByUserIdAndIdAndCid(uid, fidstr, cid)
 	if ab == nil || ab.RowId == 0 {

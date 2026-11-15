@@ -93,7 +93,7 @@ type AddressBookQuery struct {
 type ShareByWebClientForm struct {
 	Id           string `json:"id" validate:"required"`
 	PasswordType string `json:"password_type" validate:"required,oneof=once fixed"` //只能是once,fixed
-	Password     string `json:"password" validate:"required"`
+	Password     string `json:"password" validate:"required,lte=128"`
 	Expire       int64  `json:"expire"`
 }
 

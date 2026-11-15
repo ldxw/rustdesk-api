@@ -1,8 +1,9 @@
 package middleware
 
 import (
+	"strings"
+
 	"github.com/gin-gonic/gin"
-	"github.com/lejianwen/rustdesk-api/v2/global"
 	"github.com/lejianwen/rustdesk-api/v2/service"
 )
 
@@ -25,22 +26,31 @@ func RustAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if !strings.HasPrefix(token, "Bearer ") {
+			c.JSON(401, gin.H{
+				"error": "Unauthorized",
+			})
+			c.Abort()
+			return
+		}
 		//提取token，格式是Bearer {token}
-		//这里只是简单的提取
-		token = token[7:]
+		token = strings.TrimPrefix(token, "Bearer ")
+		if token == "" {
+			c.JSON(401, gin.H{
+				"error": "Unauthorized",
+			})
+			c.Abort()
+			return
+		}
 
-		//验证token
-
-		//检查是否设置了jwt key
-		if len(global.Jwt.Key) > 0 {
-			uid, _ := service.AllService.UserService.VerifyJWT(token)
-			if uid == 0 {
-				c.JSON(401, gin.H{
-					"error": "Unauthorized",
-				})
-				c.Abort()
-				return
-			}
+		//验证token，jwt key 缺失时 ParseToken 必然失败，不再跳过验签
+		uid, err := service.AllService.UserService.VerifyJWT(token)
+		if err != nil || uid == 0 {
+			c.JSON(401, gin.H{
+				"error": "Unauthorized",
+			})
+			c.Abort()
+			return
 		}
 
 		user, ut := service.AllService.UserService.InfoByAccessToken(token)

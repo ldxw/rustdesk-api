@@ -6,6 +6,7 @@ import (
 	"github.com/lejianwen/rustdesk-api/v2/http/response"
 	"github.com/lejianwen/rustdesk-api/v2/model"
 	"github.com/lejianwen/rustdesk-api/v2/service"
+	"html"
 	"os"
 	"strings"
 )
@@ -89,7 +90,8 @@ func (co *Config) AdminConfig(c *gin.Context) {
 	}
 
 	//replace {{username}} to username
-	hello = strings.Replace(hello, "{{username}}", u.Username, -1)
+	//username 是用户可控值，欢迎语模板本身允许含 HTML，因此只转义用户名，避免存储型 XSS
+	hello = strings.Replace(hello, "{{username}}", html.EscapeString(u.Username), -1)
 	response.Success(c, &gin.H{
 		"title": global.Config.Admin.Title,
 		"hello": hello,

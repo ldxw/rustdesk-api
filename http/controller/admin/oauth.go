@@ -26,7 +26,15 @@ func (o *Oauth) Info(c *gin.Context) {
 		response.Fail(c, 101, response.TranslateMsg(c, "ItemNotFound"))
 		return
 	}
-	response.Success(c, v)
+	// 绑定页只需要展示待确认的第三方账号信息，不回传 PKCE verifier、nonce、
+	// 归属用户与设备信息，避免任意登录用户凭 code 读取他人授权上下文
+	response.Success(c, gin.H{
+		"action":   v.Action,
+		"op":       v.Op,
+		"username": v.Username,
+		"name":     v.Name,
+		"email":    v.Email,
+	})
 }
 
 func (o *Oauth) ToBind(c *gin.Context) {
@@ -82,9 +90,24 @@ func (o *Oauth) Confirm(c *gin.Context) {
 		return
 	}
 	u := service.AllService.UserService.CurUser(c)
+	if u == nil {
+		response.Fail(c, 101, response.TranslateMsg(c, "NeedLogin"))
+		return
+	}
+	// 只允许确认尚未归属的登录态缓存，且不能把绑定流程的缓存当作登录确认
+	if v.Action != service.OauthActionTypeLogin || v.UserId != 0 {
+		response.Fail(c, 101, response.TranslateMsg(c, "ParamsError"))
+		return
+	}
 	v.UserId = u.Id
-	service.AllService.OauthService.SetOauthCache(j.Code, v, 0)
-	response.Success(c, v)
+	service.AllService.OauthService.SetOauthCache(j.Code, v, 5*60)
+	response.Success(c, gin.H{
+		"action":   v.Action,
+		"op":       v.Op,
+		"username": v.Username,
+		"name":     v.Name,
+		"email":    v.Email,
+	})
 }
 
 func (o *Oauth) BindConfirm(c *gin.Context) {
@@ -104,17 +127,26 @@ func (o *Oauth) BindConfirm(c *gin.Context) {
 		response.Fail(c, 101, response.TranslateMsg(c, "OauthExpired"))
 		return
 	}
-	oauthUser := oauthCache.ToOauthUser()
 	user := service.AllService.UserService.CurUser(c)
+	if user == nil {
+		response.Fail(c, 101, response.TranslateMsg(c, "NeedLogin"))
+		return
+	}
+	// 只允许本人确认自己发起的绑定，避免他人凭 code 把第三方账号绑到自己名下
+	if oauthCache.Action != service.OauthActionTypeBind || oauthCache.UserId != user.Id {
+		response.Fail(c, 101, response.TranslateMsg(c, "ParamsError"))
+		return
+	}
+	oauthUser := oauthCache.ToOauthUser()
 	err = oauthService.BindOauthUser(user.Id, oauthUser, oauthCache.Op)
 	if err != nil {
 		response.Fail(c, 101, response.TranslateMsg(c, "BindFail"))
 		return
 	}
 
-	oauthCache.UserId = user.Id
-	oauthService.SetOauthCache(j.Code, oauthCache, 0)
-	response.Success(c, oauthCache)
+	// 绑定完成后该缓存已无用途，直接释放，避免授权上下文长期驻留内存
+	oauthService.DeleteOauthCache(j.Code)
+	response.Success(c, nil)
 }
 
 func (o *Oauth) Unbind(c *gin.Context) {

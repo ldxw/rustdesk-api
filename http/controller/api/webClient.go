@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/lejianwen/rustdesk-api/v2/global"
+	apiReq "github.com/lejianwen/rustdesk-api/v2/http/request/api"
 	"github.com/lejianwen/rustdesk-api/v2/http/response"
 	"github.com/lejianwen/rustdesk-api/v2/http/response/api"
 	"github.com/lejianwen/rustdesk-api/v2/service"
@@ -52,14 +53,12 @@ func (i *WebClient) ServerConfig(c *gin.Context) {
 // @Failure 500 {object} response.Response
 // @Router /shared-peer [post]
 func (i *WebClient) SharedPeer(c *gin.Context) {
-	j := &gin.H{}
-	c.ShouldBindJSON(j)
-	t := (*j)["share_token"].(string)
-	if t == "" {
+	f := &apiReq.SharedPeerRequest{}
+	if err := c.ShouldBindJSON(f); err != nil || f.ShareToken == "" {
 		response.Fail(c, 101, "share_token is required")
 		return
 	}
-	sr := service.AllService.AddressBookService.SharedPeer(t)
+	sr := service.AllService.AddressBookService.SharedPeer(f.ShareToken)
 	if sr == nil || sr.Id == 0 {
 		response.Fail(c, 101, "share not found")
 		return
@@ -78,6 +77,16 @@ func (i *WebClient) SharedPeer(c *gin.Context) {
 		response.Fail(c, 101, "peer not found")
 		return
 	}
+
+	// 一次性分享必须在返回 tmppwd 之前原子消费：并发请求里只有一个能拿到凭据，
+	// 失败说明记录已被别的请求取走，本次不放行
+	if sr.PasswordType == "once" {
+		if !service.AllService.AddressBookService.ConsumeSharedPeer(sr.Id) {
+			response.Fail(c, 101, "share not found")
+			return
+		}
+	}
+
 	pp := &api.WebClientPeerPayload{}
 	pp.FromShareRecord(sr)
 	pp.Info.Username = ab.Username

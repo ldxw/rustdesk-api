@@ -241,7 +241,9 @@ func (o *Oauth) OauthCallback(c *gin.Context) {
 			}
 		}
 		oauthCache.UserId = user.Id
-		oauthService.SetOauthCache(cacheKey, oauthCache, 0)
+		// 授权成功后仍需保留该缓存，供客户端/后台轮询 auth-query 换取 token；
+		// 给出明确 TTL，避免缓存长期驻留（OidcAuthQueryPre 换取成功后也会立即删除）
+		oauthService.SetOauthCache(cacheKey, oauthCache, service.DefaultOauthCacheTTL)
 		// 如果是webadmin，登录成功后跳转到webadmin
 		if oauthCache.DeviceType == model.LoginLogClientWebAdmin {
 			/*service.AllService.UserService.Login(u, &model.LoginLog{

@@ -85,17 +85,18 @@ func (us *UserService) InfoByAccessToken(token string) (*model.User, *model.User
 	return u, ut
 }
 
-// GenerateToken 生成token
+// GenerateToken 生成token，jwt密钥缺失或签名失败时返回空串
 func (us *UserService) GenerateToken(u *model.User) string {
-	if len(Jwt.Key) > 0 {
-		return Jwt.GenerateToken(u.Id)
-	}
-	return utils.Md5(u.Username + time.Now().String())
+	return Jwt.GenerateToken(u.Id)
 }
 
-// Login 登录
+// Login 登录，token 生成或入库失败时返回 nil
 func (us *UserService) Login(u *model.User, llog *model.LoginLog) *model.UserToken {
 	token := us.GenerateToken(u)
+	if token == "" {
+		Logger.Error("generate user token failed, jwt key is empty or signing failed")
+		return nil
+	}
 	ut := &model.UserToken{
 		UserId:     u.Id,
 		Token:      token,
@@ -103,9 +104,14 @@ func (us *UserService) Login(u *model.User, llog *model.LoginLog) *model.UserTok
 		DeviceId:   llog.DeviceId,
 		ExpiredAt:  us.UserTokenExpireTimestamp(),
 	}
-	DB.Create(ut)
-	llog.UserTokenId = ut.UserId
-	DB.Create(llog)
+	if err := DB.Create(ut).Error; err != nil {
+		Logger.Error("create user token failed: ", err)
+		return nil
+	}
+	llog.UserTokenId = ut.Id
+	if err := DB.Create(llog).Error; err != nil {
+		Logger.Error("create login log failed: ", err)
+	}
 	if llog.Uuid != "" {
 		AllService.PeerService.UuidBindUserId(llog.DeviceId, llog.Uuid, u.Id)
 	}

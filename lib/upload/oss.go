@@ -17,7 +17,9 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -35,6 +37,15 @@ const (
 )
 
 var coder = base64.NewEncoding(base64Table)
+
+// OSS 回调验签只从阿里云官方公钥主机取公钥，
+// 避免请求头驱动服务端向任意地址发起出站请求
+const ossPublicKeyHost = "gosspublic.alicdn.com"
+
+// ossPublicKeyMaxBytes 公钥文件体积上限，防止对端返回超大响应耗尽内存
+const ossPublicKeyMaxBytes = 64 * 1024
+
+var ossPublicKeyClient = &http.Client{Timeout: 10 * time.Second}
 
 func base64Encode(src []byte) []byte {
 	return []byte(coder.EncodeToString(src))
@@ -164,29 +175,46 @@ func (oc *Oss) Verify(r *http.Request) bool {
 }
 
 // getPublicKey : Get PublicKey bytes from Request.URL
+// 公钥 URL 完全由请求头控制，必须先校验协议、主机白名单，
+// 再以固定超时和读取上限取回，避免把回调端点变成 SSRF 跳板
 func getPublicKey(r *http.Request) ([]byte, error) {
-	var bytePublicKey []byte
-	// get PublicKey URL
 	publicKeyURLBase64 := r.Header.Get("x-oss-pub-key-url")
 	if publicKeyURLBase64 == "" {
-		fmt.Println("GetPublicKey from Request header failed :  No x-oss-pub-key-url field. ")
-		return bytePublicKey, errors.New("no x-oss-pub-key-url field in Request header ")
+		return nil, errors.New("no x-oss-pub-key-url field in Request header")
 	}
-	publicKeyURL, _ := base64.StdEncoding.DecodeString(publicKeyURLBase64)
-	// fmt.Printf("publicKeyURL={%s}\n", publicKeyURL)
-	// get PublicKey Content from URL
-	responsePublicKeyURL, err := http.Get(string(publicKeyURL))
+	publicKeyURLBytes, err := base64.StdEncoding.DecodeString(publicKeyURLBase64)
 	if err != nil {
-		fmt.Printf("Get PublicKey Content from URL failed : %s \n", err.Error())
-		return bytePublicKey, err
+		return nil, errors.New("invalid x-oss-pub-key-url encoding")
 	}
-	bytePublicKey, err = ioutil.ReadAll(responsePublicKeyURL.Body)
+	u, err := url.Parse(string(publicKeyURLBytes))
+	if err != nil || u.Host == "" {
+		return nil, errors.New("invalid public key url")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, errors.New("invalid public key url scheme")
+	}
+	host := strings.ToLower(u.Hostname())
+	if host != ossPublicKeyHost && !strings.HasSuffix(host, ".aliyuncs.com") {
+		return nil, errors.New("public key url host not allowed")
+	}
+
+	resp, err := ossPublicKeyClient.Get(u.String())
 	if err != nil {
-		fmt.Printf("Read PublicKey Content from URL failed : %s \n", err.Error())
-		return bytePublicKey, err
+		return nil, err
 	}
-	defer responsePublicKeyURL.Body.Close()
-	// fmt.Printf("publicKey={%s}\n", bytePublicKey)
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("fetch public key failed: %s", resp.Status)
+	}
+
+	bytePublicKey, err := io.ReadAll(io.LimitReader(resp.Body, ossPublicKeyMaxBytes))
+	if err != nil {
+		return nil, err
+	}
+	if len(bytePublicKey) == 0 {
+		return nil, errors.New("empty public key")
+	}
 	return bytePublicKey, nil
 }
 
@@ -199,7 +227,10 @@ func getAuthorization(r *http.Request) ([]byte, error) {
 		fmt.Println("Failed to get authorization field from request header. ")
 		return byteAuthorization, errors.New("no authorization field in Request header")
 	}
-	byteAuthorization, _ = base64.StdEncoding.DecodeString(strAuthorizationBase64)
+	byteAuthorization, err := base64.StdEncoding.DecodeString(strAuthorizationBase64)
+	if err != nil || len(byteAuthorization) == 0 {
+		return nil, errors.New("invalid authorization field in Request header")
+	}
 	return byteAuthorization, nil
 }
 
@@ -218,7 +249,7 @@ func getMD5FromNewAuthString(r *http.Request) ([]byte, error) {
 	// fmt.Printf("r.URL.RawPath={%s}, r.URL.Query()={%s}, strCallbackBody={%s}\n", r.URL.RawPath, r.URL.Query(), strCallbackBody)
 	strURLPathDecode, errUnescape := unescapePath(r.URL.Path, encodePathSegment) //url.PathUnescape(r.URL.Path) for Golang v1.8.2+
 	if errUnescape != nil {
-		fmt.Printf("url.PathUnescape failed : URL.Path=%s, error=%s \n", r.URL.Path, err.Error())
+		fmt.Printf("url.PathUnescape failed : URL.Path=%s, error=%s \n", r.URL.Path, errUnescape.Error())
 		return byteMD5, errUnescape
 	}
 
@@ -257,7 +288,11 @@ func verifySignature(bytePublicKey []byte, byteMd5 []byte, authorization []byte)
 		fmt.Printf("x509.ParsePKIXPublicKey(publicKey) failed : %s \n", err.Error())
 		return false
 	}
-	pub := pubInterface.(*rsa.PublicKey)
+	pub, ok := pubInterface.(*rsa.PublicKey)
+	if !ok {
+		fmt.Printf("public key is not an RSA key")
+		return false
+	}
 
 	errorVerifyPKCS1v15 := rsa.VerifyPKCS1v15(pub, crypto.MD5, byteMd5, authorization)
 	if errorVerifyPKCS1v15 != nil {

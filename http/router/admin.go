@@ -56,7 +56,7 @@ func Init(g *gin.Engine) {
 
 func RustdeskCmdBind(adg *gin.RouterGroup) {
 	cont := &admin.Rustdesk{}
-	rg := adg.Group("/rustdesk")
+	rg := adg.Group("/rustdesk").Use(middleware.AdminPrivilege())
 	rg.POST("/sendCmd", cont.SendCmd)
 	rg.GET("/cmdList", cont.CmdList)
 	rg.POST("/cmdDelete", cont.CmdDelete)
@@ -80,11 +80,12 @@ func UserBind(rg *gin.RouterGroup) {
 		aR.POST("/changeCurPwd", cont.ChangeCurPwd)
 		aR.POST("/myOauth", cont.MyOauth)
 		//aR.GET("/myPeer", cont.MyPeer)
-		aR.POST("/groupUsers", cont.GroupUsers)
 	}
 	aRP := rg.Group("/user").Use(middleware.AdminPrivilege())
 	{
 		cont := &admin.User{}
+		//groupUsers 返回全站用户与分组，属于管理数据，仅管理员可读
+		aRP.POST("/groupUsers", cont.GroupUsers)
 		aRP.GET("/list", cont.List)
 		aRP.GET("/detail/:id", cont.Detail)
 		aRP.POST("/create", cont.Create)

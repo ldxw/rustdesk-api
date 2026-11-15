@@ -54,6 +54,11 @@ func (i *Index) Heartbeat(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{})
 		return
 	}
+	// 心跳必须与 peer 已登记的 uuid 一致，否则任何人都能拿设备 ID 刷新他人在线状态和 IP
+	if peer.Uuid != "" && peer.Uuid != info.Uuid {
+		c.JSON(http.StatusOK, gin.H{})
+		return
+	}
 	//如果在40s以内则不更新
 	if time.Now().Unix()-peer.LastOnlineTime >= 30 {
 		upp := &model.Peer{RowId: peer.RowId, LastOnlineTime: time.Now().Unix(), LastOnlineIp: c.ClientIP()}

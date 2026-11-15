@@ -216,7 +216,7 @@ func (ct *User) UpdatePassword(c *gin.Context) {
 func (ct *User) Current(c *gin.Context) {
 	u := service.AllService.UserService.CurUser(c)
 	token, _ := c.Get("token")
-	t := token.(string)
+	t, _ := token.(string)
 	responseLoginSuccess(c, u, t)
 }
 
@@ -244,8 +244,17 @@ func (ct *User) ChangeCurPwd(c *gin.Context) {
 		return
 	}
 	u := service.AllService.UserService.CurUser(c)
-	// Verify the old password only when the account already has one set
-	if !service.AllService.UserService.IsPasswordEmptyByUser(u) {
+	if u == nil {
+		response.Fail(c, 101, response.TranslateMsg(c, "NeedLogin"))
+		return
+	}
+	// 仅当账号确实由第三方登录自动创建（密码为空且有 OAuth 绑定）时才允许免旧密码首次设密，
+	// 避免非第三方来源的空密码账号（异常数据、被清空的密码）被直接接管
+	oauthOnly := service.AllService.UserService.IsPasswordEmptyByUser(u) &&
+		len(service.AllService.UserService.UserThirdsByUserId(u.Id)) > 0
+	if oauthOnly {
+		global.Logger.Warnf("user %d set password without old password (oauth-only account), ip=%s", u.Id, c.ClientIP())
+	} else {
 		ok, _, err := utils.VerifyPassword(u.Password, f.OldPassword)
 		if err != nil || !ok {
 			response.Fail(c, 101, response.TranslateMsg(c, "OldPasswordError"))
@@ -310,27 +319,52 @@ func (ct *User) Register(c *gin.Context) {
 		response.Fail(c, 101, response.TranslateMsg(c, "RegisterClosed"))
 		return
 	}
+	// 注册端点公开且无需认证，必须与登录共用同一套限流/验证码，
+	// 否则可被脚本无限次批量注册
+	loginLimiter := global.LoginLimiter
+	clientIp := c.ClientIP()
+	banned, needCaptcha := loginLimiter.CheckSecurityStatus(clientIp)
+	if banned {
+		response.Fail(c, 101, response.TranslateMsg(c, "LoginBanned"))
+		return
+	}
+
 	f := &admin.RegisterForm{}
 	if err := c.ShouldBindJSON(f); err != nil {
+		loginLimiter.RecordFailedAttempt(clientIp)
 		response.Fail(c, 101, response.TranslateMsg(c, "ParamsError")+err.Error())
 		return
 	}
 	errList := global.Validator.ValidStruct(c, f)
 	if len(errList) > 0 {
+		loginLimiter.RecordFailedAttempt(clientIp)
 		response.Fail(c, 101, errList[0])
 		return
 	}
+	if needCaptcha {
+		if f.CaptchaId == "" || f.Captcha == "" || !loginLimiter.VerifyCaptcha(clientIp, f.CaptchaId, f.Captcha) {
+			response.Fail(c, 101, response.TranslateMsg(c, "CaptchaError"))
+			return
+		}
+	}
 	regStatus := model.StatusCode(global.Config.App.RegisterStatus)
-	// 注册状态可能未配置，默认启用
+	// 注册状态可能未配置，按最小权限默认禁用，需管理员审核后才能登录
 	if regStatus != model.COMMON_STATUS_DISABLED && regStatus != model.COMMON_STATUS_ENABLE {
-		regStatus = model.COMMON_STATUS_ENABLE
+		regStatus = model.COMMON_STATUS_DISABLED
 	}
 
 	u := service.AllService.UserService.Register(f.Username, f.Email, f.Password, regStatus)
 	if u == nil || u.Id == 0 {
-		response.Fail(c, 101, response.TranslateMsg(c, "OperationFailed"))
+		loginLimiter.RecordFailedAttempt(clientIp)
+		msg := response.TranslateMsg(c, "OperationFailed")
+		if _, needCaptcha = loginLimiter.CheckSecurityStatus(clientIp); needCaptcha {
+			msg = response.TranslateMsg(c, "CaptchaRequired") + ": " + msg
+		}
+		response.Fail(c, 101, msg)
 		return
 	}
+	// 注册成功，清除该 IP 的失败计数
+	loginLimiter.RemoveAttempts(clientIp)
 	if regStatus == model.COMMON_STATUS_DISABLED {
 		// 需要管理员审核
 		response.Fail(c, 101, response.TranslateMsg(c, "RegisterSuccessWaitAdminConfirm"))
@@ -344,5 +378,9 @@ func (ct *User) Register(c *gin.Context) {
 		Ip:     c.ClientIP(),
 		Type:   model.LoginLogTypeAccount,
 	})
+	if ut == nil {
+		response.Fail(c, 101, response.TranslateMsg(c, "OperationFailed"))
+		return
+	}
 	responseLoginSuccess(c, u, ut.Token)
 }

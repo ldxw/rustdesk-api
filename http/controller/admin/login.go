@@ -58,7 +58,7 @@ func (ct *Login) Login(c *gin.Context) {
 
 	// 检查是否需要验证码
 	if needCaptcha {
-		if f.CaptchaId == "" || f.Captcha == "" || !loginLimiter.VerifyCaptcha(f.CaptchaId, f.Captcha) {
+		if f.CaptchaId == "" || f.Captcha == "" || !loginLimiter.VerifyCaptcha(clientIp, f.CaptchaId, f.Captcha) {
 			response.Fail(c, 101, response.TranslateMsg(c, "CaptchaError"))
 			return
 		}
@@ -95,6 +95,11 @@ func (ct *Login) Login(c *gin.Context) {
 		Platform: f.Platform,
 	})
 
+	if ut == nil {
+		response.Fail(c, 101, response.TranslateMsg(c, "OperationFailed"))
+		return
+	}
+
 	// 登录成功，清除登录限制
 	loginLimiter.RemoveAttempts(clientIp)
 	responseLoginSuccess(c, u, ut.Token)
@@ -111,7 +116,7 @@ func (ct *Login) Captcha(c *gin.Context) {
 		response.Fail(c, 101, response.TranslateMsg(c, "NoCaptchaRequired"))
 		return
 	}
-	err, captcha := loginLimiter.RequireCaptcha()
+	err, captcha := loginLimiter.RequireCaptcha(clientIp)
 	if err != nil {
 		response.Fail(c, 101, response.TranslateMsg(c, "CaptchaError")+err.Error())
 		return
@@ -142,7 +147,9 @@ func (ct *Login) Logout(c *gin.Context) {
 	u := service.AllService.UserService.CurUser(c)
 	token, ok := c.Get("token")
 	if ok {
-		service.AllService.UserService.Logout(u, token.(string))
+		if t, isStr := token.(string); isStr {
+			service.AllService.UserService.Logout(u, t)
+		}
 	}
 	response.Success(c, nil)
 }

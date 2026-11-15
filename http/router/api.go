@@ -36,6 +36,8 @@ func ApiInit(g *gin.Engine) {
 		// 如果返回oidc则可以通过oidc登录
 		frg.GET("/login-options", l.LoginOptions)
 		frg.POST("/login", l.Login)
+		// 登录失败次数过多时获取验证码
+		frg.GET("/captcha", l.Captcha)
 
 	}
 

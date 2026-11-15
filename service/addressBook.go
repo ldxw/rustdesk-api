@@ -163,6 +163,13 @@ func (s *AddressBookService) SharedPeer(shareToken string) *model.ShareRecord {
 	return m
 }
 
+// ConsumeSharedPeer 消费一次性分享：原子删除记录，返回是否由本次请求成功消费。
+// 返回 false 表示记录已不存在（被并发请求或先前的访问取走），本次访问不应放行
+func (s *AddressBookService) ConsumeSharedPeer(id uint) bool {
+	res := DB.Where("id = ?", id).Delete(&model.ShareRecord{})
+	return res.Error == nil && res.RowsAffected > 0
+}
+
 // PlatformFromOs
 func (s *AddressBookService) PlatformFromOs(os string) string {
 	if strings.Contains(os, "Android") || strings.Contains(os, "android") {
